@@ -37,25 +37,54 @@ def parse_xml(xml_file):
         address = table.get("address")
         elements_x_table = table.find(".//table[@type='X Axis']")
         elements_y_table = table.find(".//table[@type='Y Axis']")
-        scaling_name = table.get("scaling")
-        scaling = None
-        if scaling_name:
-            scaling_element = root.find(f".//scaling[@name='{scaling_name}']")
-            if scaling_element is not None:
-                scaling = {
-                    "toexpr": scaling_element.get("toexpr"),
-                    "storagetype": scaling_element.get("storagetype"),
-                    "endian": scaling_element.get("endian", "big"),
+
+        # Extract table scaling
+        table_scaling_name = table.get("scaling")
+        table_scaling = None
+        if table_scaling_name:
+            table_scaling_element = root.find(f".//scaling[@name='{table_scaling_name}']")
+            if table_scaling_element is not None:
+                table_scaling = {
+                    "toexpr": table_scaling_element.get("toexpr"),
+                    "storagetype": table_scaling_element.get("storagetype"),
+                    "endian": table_scaling_element.get("endian", "big"),
                 }
+
+        # Extract X-axis scaling
+        x_scaling = None
+        if elements_x_table is not None and elements_x_table.get("scaling"):
+            x_scaling_name = elements_x_table.get("scaling")
+            x_scaling_element = root.find(f".//scaling[@name='{x_scaling_name}']")
+            if x_scaling_element is not None:
+                x_scaling = {
+                    "toexpr": x_scaling_element.get("toexpr"),
+                    "storagetype": x_scaling_element.get("storagetype"),
+                    "endian": x_scaling_element.get("endian", "big"),
+                }
+
+        # Extract Y-axis scaling
+        y_scaling = None
+        if elements_y_table is not None and elements_y_table.get("scaling"):
+            y_scaling_name = elements_y_table.get("scaling")
+            y_scaling_element = root.find(f".//scaling[@name='{y_scaling_name}']")
+            if y_scaling_element is not None:
+                y_scaling = {
+                    "toexpr": y_scaling_element.get("toexpr"),
+                    "storagetype": y_scaling_element.get("storagetype"),
+                    "endian": y_scaling_element.get("endian", "big"),
+                }
+
         mapping = {
-            "name": table.get("name", ""),  # Default to an empty string if name is None
+            "name": table.get("name", ""),
             "address": int(address, 16) if address else 0,
             "type": table.get("type"),
             "elements_x": int(elements_x_table.get("elements", "0")) if elements_x_table is not None else 0,
             "elements_y": int(elements_y_table.get("elements", "0")) if elements_y_table is not None else 0,
             "address_x": int(elements_x_table.get("address"), 16) if elements_x_table is not None else None,
             "address_y": int(elements_y_table.get("address"), 16) if elements_y_table is not None else None,
-            "scaling": scaling,
+            "scaling_x": x_scaling,
+            "scaling_y": y_scaling,
+            "scaling": table_scaling,
         }
         mappings.append(mapping)
     return mappings
@@ -65,10 +94,15 @@ def apply_scaling(value, scaling):
     if scaling and "toexpr" in scaling:
         x = value  # Variable used in the formula
         try:
-            return round(eval(scaling["toexpr"]), 2)
+            result = eval(scaling["toexpr"])
+            return round(result, 2)
+        except ZeroDivisionError:
+            print(f"Scaling error: Division by zero in scaling formula with value {value}")
+            return 0  # Default to 0 or another fallback
         except Exception as e:
             print(f"Error applying scaling: {e}")
-    return round(value, 2)
+            return value  # Return raw value on error
+    return value  # No scaling
 
 def decode_bin(binary_file, mappings):
     """Decode the binary file using the extracted mappings."""
@@ -82,9 +116,11 @@ def decode_bin(binary_file, mappings):
         elements_y = mapping.get("elements_y", 0)
         address_x = mapping.get("address_x")
         address_y = mapping.get("address_y")
-        scaling = mapping.get("scaling")
-        storagetype = scaling.get("storagetype") if scaling else "uint16"
-        endian = ">" if scaling and scaling.get("endian") == "big" else "<"
+        table_scaling = mapping.get("scaling")
+        scaling_x = mapping.get("scaling_x", table_scaling)
+        scaling_y = mapping.get("scaling_y", table_scaling)
+        storagetype = table_scaling.get("storagetype") if table_scaling else "uint16"
+        endian = ">" if table_scaling and table_scaling.get("endian") == "big" else "<"
 
         # Determine struct format based on storagetype
         format_char = "H"  # Default to uint16
@@ -95,34 +131,39 @@ def decode_bin(binary_file, mappings):
         elif storagetype == "float":
             format_char = "f"
 
-        # Decode axes and data together
         x_axis = []
         if address_x and elements_x:
-            x_axis = [apply_scaling(val, scaling) for val in struct.unpack_from(f"{endian}{elements_x}{format_char}", binary_data, address_x)]
-        
+            x_raw = struct.unpack_from(f">{elements_x}H", binary_data, address_x)
+            x_axis = [apply_scaling(val, scaling_x) for val in x_raw]
+
+        # Decode Y Axis
         y_axis = []
         if address_y and elements_y:
-            y_axis = [apply_scaling(val, scaling) for val in struct.unpack_from(f"{endian}{elements_y}{format_char}", binary_data, address_y)]
+            y_raw = struct.unpack_from(f">{elements_y}H", binary_data, address_y)
+            y_axis = [apply_scaling(val, scaling_y) for val in y_raw]
 
-        # Decode table data
+        # Decode Table Data
         table_data = []
         if elements_x and elements_y:
-            for row in range(elements_y):
-                start = address + row * elements_x * struct.calcsize(format_char)
-                row_data = list(struct.unpack_from(f"{endian}{elements_x}{format_char}", binary_data, start))
-                row_data = [apply_scaling(val, scaling) for val in row_data]
-                table_data.append(row_data)
+            try:
+                for row in range(elements_y):
+                    start = address + row * elements_x * struct.calcsize(format_char)
+                    row_raw = struct.unpack_from(f"{endian}{elements_x}{format_char}", binary_data, start)
+                    row_scaled = [apply_scaling(val, table_scaling) for val in row_raw]
+                    table_data.append(row_scaled)
+            except Exception as e:
+                print(f"Error decoding table data for {mapping['name']}: {e}")
+                continue
 
-        # Combine x_axis, y_axis, and data
-        combined_table = {
+        # Store the decoded data
+        decoded_data[mapping["name"]] = {
             "x_axis": x_axis,
             "y_axis": y_axis,
-            "data": table_data
+            "data": table_data,
         }
 
-        decoded_data[mapping["name"]] = combined_table
-
     return decoded_data
+
 
 def edit_bin(binary_file, mappings):
     """Edit the binary file by replacing an entire table including axes based on user input via the terminal."""
