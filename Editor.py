@@ -211,45 +211,34 @@ def edit_bin(binary_file, mappings):
         modified_bin_file.write(binary_data)
 
 def main():
-    print("Welcome to the ECU Editor!")
-
-    # Select XML file
-    print("\nStep 1: Select an XML file.")
+    # Select XML and binary files
     xml_file = select_file(".xml")
     if not xml_file:
         print("No XML file selected. Exiting.")
         return
 
-    # Select BIN file
-    print("\nStep 2: Select a BIN file.")
     binary_file = select_file(".bin")
     if not binary_file:
-        print("No BIN file selected. Exiting.")
+        print("No binary file selected. Exiting.")
         return
 
-    print(f"\nSelected XML file: {xml_file}")
-    print(f"Selected BIN file: {binary_file}")
-
     # Parse XML file
-    print("\nParsing XML file...")
     mappings = parse_xml(xml_file)
 
     # Decode binary file
-    print("\nDecoding BIN file...")
     decoded_data = decode_bin(binary_file, mappings)
 
     # Output decoded data
     print("\nDecoded data:")
     for key, value in decoded_data.items():
-        print(f"\nTable: {key}")
-        print(f"  X Axis: {value['x_axis']}")
-        print(f"  Y Axis: {value['y_axis']}")
-        if value["data"]:
-            print("  Data:")
-            for row in value["data"]:
-                print("    " + " ".join(map(str, row)))
-        else:
-            print("  Data: None")
+        print(f"\n{'='*50}")
+        print(f"Table: {key}")
+        print(f"{'-'*50}")
+        print(f"X Axis: {', '.join(map(str, value['x_axis']))}")
+        print(f"Y Axis: {', '.join(map(str, value['y_axis']))}")
+        print("Data:")
+        for row in value["data"]:
+            print("  " + " ".join(f"{x:6.2f}" for x in row))
 
     # Ask if user wants to edit the binary file
     edit_mode = input("\nDo you want to edit the binary file? (y/n): ").strip().lower() == "y"
